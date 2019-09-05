@@ -15,7 +15,7 @@
     <description>Demo project for Spring Boot</description>
 
     <properties>
-        <java.version>12</java.version>
+        <java.version>11</java.version>
     </properties>
 
     <dependencyManagement>
@@ -27,6 +27,15 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
+            <dependency>
+                <groupId>io.r2dbc</groupId>
+                <artifactId>r2dbc-bom</artifactId>
+                <version>Arabba-BUILD-SNAPSHOT</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
     <dependencies>
