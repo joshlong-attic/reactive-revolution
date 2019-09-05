@@ -17,37 +17,19 @@
     <properties>
         <java.version>12</java.version>
     </properties>
-    <!--  -->
 
-
-    <!--  -->
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>org.springframework.boot.experimental</groupId>
                 <artifactId>spring-boot-dependencies-r2dbc</artifactId>
-                <!-- <version>0.1.0.M1</version> -->
                 <version>0.1.0.BUILD-SNAPSHOT</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
-
-    <!--  -->
-
-
     <dependencies>
-        <!--
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-mongodb-reactive</artifactId>
-        </dependency>
--->
-
-
-        <!--  -->
-
         <dependency>
             <groupId>org.springframework.boot.experimental</groupId>
             <artifactId>spring-boot-starter-data-r2dbc</artifactId>
@@ -56,8 +38,6 @@
             <groupId>io.r2dbc</groupId>
             <artifactId>r2dbc-postgresql</artifactId>
         </dependency>
-
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-rsocket</artifactId>
@@ -66,7 +46,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
         </dependency>
-
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
