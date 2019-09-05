@@ -1,6 +1,5 @@
 package com.example.reservationservice;
 
-import io.r2dbc.spi.ConnectionFactory;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -13,15 +12,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.annotation.Id;
-import org.springframework.data.r2dbc.connectionfactory.R2dbcTransactionManager;
 import org.springframework.data.repository.reactive.ReactiveCrudRepository;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Controller;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.ReactiveTransactionManager;
-import org.springframework.transaction.reactive.TransactionalOperator;
-import org.springframework.util.Assert;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import org.springframework.web.reactive.handler.SimpleUrlHandlerMapping;
@@ -42,16 +36,6 @@ import static org.springframework.web.reactive.function.server.ServerResponse.ok
 public class ReservationServiceApplication {
 
 	@Bean
-	ReactiveTransactionManager reactiveTransactionManager(ConnectionFactory cf) {
-		return new R2dbcTransactionManager(cf);
-	}
-
-	@Bean
-	TransactionalOperator transactionalOperator(ReactiveTransactionManager txm) {
-		return TransactionalOperator.create(txm);
-	}
-
-	@Bean
 	RouterFunction<ServerResponse> routes(ReservationRepository rr) {
 		return route()
 			.GET("/reservations", r -> ok().body(rr.findAll(), Reservation.class))
@@ -62,7 +46,6 @@ public class ReservationServiceApplication {
 		SpringApplication.run(ReservationServiceApplication.class, args);
 	}
 }
-
 
 @Data
 @AllArgsConstructor
@@ -78,87 +61,71 @@ class GreetingRequest {
 	private String name;
 }
 
+@Controller
+class GreetingService {
+
+	@MessageMapping("greetings")
+	Flux<GreetingResponse> greet(GreetingRequest request) {
+		return Flux
+			.fromStream(Stream.generate(() -> new GreetingResponse("Hello " + request.getName() + " @ " + Instant.now() + "!")))
+			.delayElements(Duration.ofSeconds(1));
+	}
+}
 
 @Configuration
-class GreetingWebSocketConfiguration {
+class GreetingsWebsocketConfiguration {
 
 	@Bean
 	WebSocketHandler webSocketHandler(GreetingService gs) {
 		return session -> {
 
-			var discussion = session
+			var receive = session
 				.receive()
 				.map(WebSocketMessage::getPayloadAsText)
-				.map(GreetingRequest::new)
-				.flatMap(gs::greet)
+				.map(GreetingRequest::new).flatMap(gs::greet)
 				.map(GreetingResponse::getMessage)
 				.map(session::textMessage);
 
-			return session.send(discussion);
+			return session.send(receive);
 		};
-	}
-
-	@Bean
-	SimpleUrlHandlerMapping simpleUrlHandlerMapping(WebSocketHandler wsh) {
-		return new SimpleUrlHandlerMapping(Map.of("/ws/greetings", wsh), 10);
 	}
 
 	@Bean
 	WebSocketHandlerAdapter webSocketHandlerAdapter() {
 		return new WebSocketHandlerAdapter();
 	}
-}
 
-@Controller
-class GreetingService {
-
-	@MessageMapping("greetings")
-	Flux<GreetingResponse> greet(GreetingRequest req) {
-		return Flux
-			.fromStream(Stream.generate(() -> new GreetingResponse("Hello " + req.getName() + " @ " + Instant.now() + "!")))
-			.delayElements(Duration.ofSeconds(1));
+	@Bean
+	SimpleUrlHandlerMapping simpleUrlHandlerMapping(WebSocketHandler wsh) {
+		return new SimpleUrlHandlerMapping(Map.of("/ws/greetings", wsh), 10);
 	}
 }
 
-@Service
-@RequiredArgsConstructor
-class ReservationService {
-
-	private final TransactionalOperator transactionalOperator;
-	private final ReservationRepository reservationRepository;
-
-	public Flux<Reservation> save(String... names) {
-		var returnValue = Flux.fromArray(names)
-			.map(name -> new Reservation(null, name))
-			.flatMap(this.reservationRepository::save)
-			.doOnNext(r -> Assert.isTrue(Character.isUpperCase(r.getName().charAt(0)), "the first name should start with an uppercase!"));
-
-		return this.transactionalOperator.transactional(returnValue);
-	}
-}
-
+@Log4j2
 @Component
 @RequiredArgsConstructor
-@Log4j2
 class SampleDataInitializer {
 
 	private final ReservationRepository reservationRepository;
-	private final ReservationService reservationService;
 
 	@EventListener(ApplicationReadyEvent.class)
-	public void go() {
+	public void ready() {
+
+		var names = Flux
+			.just("Josh", "Olga", "Dave", "Violetta", "Spencer", "Madhura", "Illaya", "Ria")
+			.map(name -> new Reservation(null, name))
+			.flatMap(this.reservationRepository::save);
 
 		this.reservationRepository
 			.deleteAll()
-			.thenMany(reservationService.save("Josh", "Madhura", "Stephane", "Dave", "Olga", "Ria", "Violetta", "Cornelia"))
+			.thenMany(names)
 			.thenMany(this.reservationRepository.findAll())
 			.subscribe(log::info);
-
 	}
 }
 
 
-interface ReservationRepository extends ReactiveCrudRepository<Reservation, Integer> {
+interface ReservationRepository extends ReactiveCrudRepository<Reservation, String> {
 }
 
 @Data
@@ -167,7 +134,6 @@ interface ReservationRepository extends ReactiveCrudRepository<Reservation, Inte
 class Reservation {
 
 	@Id
-	private Integer id;
+	private String id;
 	private String name;
-
 }
