@@ -6,26 +6,29 @@ import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreaker;
-import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFactory;
-import org.springframework.cloud.gateway.filter.GatewayFilter;
-import org.springframework.cloud.gateway.filter.GatewayFilterChain;
+import org.springframework.cloud.gateway.filter.ratelimit.RedisRateLimiter;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.messaging.rsocket.RSocketRequester;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.web.server.ServerHttpSecurity;
+import org.springframework.security.core.userdetails.MapReactiveUserDetailsService;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.server.HandlerFunction;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
-import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import javax.print.attribute.standard.Media;
 import java.time.Duration;
 
 import static org.springframework.web.reactive.function.server.RouterFunctions.route;
@@ -34,58 +37,85 @@ import static org.springframework.web.reactive.function.server.RouterFunctions.r
 public class EdgeServiceApplication {
 
 	@Bean
-	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
-		return builder.connectTcp("localhost", 7777).block();
+	RedisRateLimiter redisRateLimiter() {
+		return new RedisRateLimiter(5, 7);
 	}
 
 	@Bean
-	WebClient webClient(WebClient.Builder builder) {
+	SecurityWebFilterChain authorization(ServerHttpSecurity http) {
+		return http
+			.httpBasic(Customizer.withDefaults())
+			.csrf(ServerHttpSecurity.CsrfSpec::disable)
+			.authorizeExchange(ex ->
+				ex
+					.pathMatchers("/proxy").authenticated()
+					.anyExchange().permitAll()
+			)
+			.build();
+	}
+
+	@Bean
+	MapReactiveUserDetailsService authentication() {
+		UserDetails jlong = User.withDefaultPasswordEncoder()
+			.username("jlong").password("pw").roles("USER")
+			.build();
+		UserDetails rwinch = User.withDefaultPasswordEncoder()
+			.username("rwinch").password("pw").roles("USER")
+			.build();
+		return new MapReactiveUserDetailsService(jlong, rwinch);
+	}
+
+	@Bean
+	WebClient client(WebClient.Builder builder) {
 		return builder.build();
 	}
 
 	@Bean
-	RouterFunction<ServerResponse> adapter(ReservationClient rc,
-	                                       GreetingClient gc,
-	                                       ReactiveCircuitBreakerFactory cbf) {
-
-
-		ReactiveCircuitBreaker namesCB = cbf.create("names");
+	RouterFunction<ServerResponse> adapter(
+		GreetingsClient gc,
+		ReservationClient rc) {
 
 		return route()
-			.GET("/greeting/{name}", r -> {
-				String name = r.pathVariable("name");
-				Flux<GreetingResponse> greet = gc.greet(new GreetingRequest(name));
+			.GET("/greetings/{name}", request -> {
+				var name = new GreetingRequest(request.pathVariable("name"));
+				var greetingResponseFlux = gc.greet(name);
 				return ServerResponse
 					.ok()
 					.contentType(MediaType.TEXT_EVENT_STREAM)
-					.body(greet, GreetingResponse.class);
+					.body(greetingResponseFlux, GreetingResponse.class);
 			})
-			.GET("/reservations/names", serverRequest -> {
+			.GET("/reservations/names", request -> {
 
-				Flux<String> names = rc
+				var names = rc
 					.getAllReservations()
-					.map(Reservation::getName);
+					.map(Reservation::getName)
+					.onErrorResume(ex -> Flux.just("EEEK!"))
+					.retryBackoff(10, Duration.ofSeconds(1));
 
-				Flux<String> run = namesCB
-					.run(names, ex -> Flux.just("EEEEEEEEEEEEEEEEEEK!"));
-
-				return ServerResponse.ok().body(run, String.class);
+				return ServerResponse.ok().body(names, String.class);
 			})
 			.build();
+	}
+
+	@Bean
+	RSocketRequester rSocketRequester(RSocketRequester.Builder builder) {
+		return builder.connectTcp("localhost", 8888).block();
 	}
 
 	@Bean
 	RouteLocator gateway(RouteLocatorBuilder rlb) {
 		return rlb
 			.routes()
-			.route(
-				routeSpec -> routeSpec
-					.host("*.spring.io").and().path("/proxy")
-					.filters(filterSpec -> filterSpec
-						.setPath("/reservations")
-						.addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+			.route(rSpec -> rSpec
+				.path("/proxy").and().host("*.spring.io")
+				.filters(fSpec -> fSpec
+					.setPath("/reservations")
+					.requestRateLimiter(rlc -> rlc
+						.setRateLimiter(redisRateLimiter())
 					)
-					.uri("http://localhost:8080")
+					.addResponseHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+				)
+				.uri("http://localhost:8080")
 			)
 			.build();
 	}
@@ -98,9 +128,34 @@ public class EdgeServiceApplication {
 
 @Component
 @RequiredArgsConstructor
+class GreetingsClient {
+
+	private final RSocketRequester requester;
+
+	Flux<GreetingResponse> greet(GreetingRequest request) {
+		return this.requester
+			.route("greetings")
+			.data(request)
+			.retrieveFlux(GreetingResponse.class);
+	}
+}
+
+@Component
+@RequiredArgsConstructor
 class ReservationClient {
 
 	private final WebClient client;
+
+	Flux<Reservation> getAllReservations() {
+//		DiscoveryClient dc = null; //todo
+//		List<ServiceInstance> instances = dc.getInstances("foo-services");
+//		Stream<String> stringStream = instances.subList(0, 3).stream().map(si -> si.getHost() + ':' + si.getPort());
+		Flux<Reservation> host1 = getAllReservations("localhost"); // no network!
+//		Flux<Reservation> host2 = getAllReservations("host2");
+//		Flux<Reservation> host3 = getAllReservations("host3"); // ...
+		return Flux.first(host1);
+	}
+
 
 	private Flux<Reservation> getAllReservations(String host) {
 		return this.client
@@ -109,24 +164,16 @@ class ReservationClient {
 			.retrieve()
 			.bodyToFlux(Reservation.class);
 	}
-
-	Flux<Reservation> getAllReservations() {
-//		Flux<Reservation> host1 = getAllReservations("host1");
-//		Flux<Reservation> host2 = getAllReservations("host2");
-//		Flux<Reservation> host3 = getAllReservations("host3");
-		/// ....
-		return getAllReservations("localhost");
-	}
-
 }
-
 
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-class GreetingResponse {
-	private String message;
+class Reservation {
+	private Integer id;
+	private String name;
 }
+
 
 @Data
 @AllArgsConstructor
@@ -135,25 +182,11 @@ class GreetingRequest {
 	private String name;
 }
 
-
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-class Reservation {
-	private String id;
-	private String name;
+class GreetingResponse {
+	private String message;
 }
 
-@Component
-@RequiredArgsConstructor
-class GreetingClient {
 
-	private final RSocketRequester rSocketRequester;
-
-	Flux<GreetingResponse> greet(GreetingRequest request) {
-		return this.rSocketRequester
-			.route("greetings")
-			.data(request)
-			.retrieveFlux(GreetingResponse.class);
-	}
-}
