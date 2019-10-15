@@ -1,0 +1,15 @@
+<html>
+<body>
+<script>
+    window.addEventListener('load', function (e) {
+        var ws = new WebSocket('ws://localhost:8080/ws/greetings');
+        ws.addEventListener('open', function (e) {
+            ws.send('Sander');
+        });
+        ws.addEventListener('message', function (e) {
+            console.log('' + e.data)
+        });
+    })
+</script>
+</body>
+</html>
