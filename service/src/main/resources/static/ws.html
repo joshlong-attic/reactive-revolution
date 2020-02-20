@@ -2,12 +2,12 @@
 <body>
 <script>
     window.addEventListener('load', function (e) {
-        var ws = new WebSocket('ws://localhost:8080/ws/greetings');
+        const ws = new WebSocket('ws://localhost:8080/ws/greetings');
         ws.addEventListener('open', function (e) {
-            ws.send('Sander');
+            ws.send('websockets');
         });
         ws.addEventListener('message', function (e) {
-            console.log('' + e.data)
+            console.log('new message: ' + e.data);
         });
     })
 </script>
