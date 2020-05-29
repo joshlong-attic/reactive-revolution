@@ -1,0 +1,16 @@
+<html>
+<body>
+<script>
+    window.addEventListener('load', (e) => {
+        const ws = new WebSocket('ws://localhost:8080/ws/greetings')
+        ws.addEventListener('message', (m) => {
+            console.log(m.data)
+        })
+        ws.addEventListener('open', (e) => {
+            ws.send('Spring Fans')
+        })
+    })
+
+</script>
+</body>
+</html>
